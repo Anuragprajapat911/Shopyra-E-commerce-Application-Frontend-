@@ -1,9 +1,14 @@
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { createApiClient } from './api';
+import Skeleton from './components/ui/Skeleton';
+import Navbar from './components/layout/Navbar';
+import useConfirm from './hooks/useConfirm';
 
 const AUTH_KEY = 'shopyra_auth_v1';
+const WISHLIST_KEY = 'shopyra_wishlist_v1';
+const ShopPage = lazy(() => import('./pages/ShopPage'));
 
 const readAuth = () => {
   try {
@@ -16,13 +21,55 @@ const readAuth = () => {
   }
 };
 
+const readWishlist = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(WISHLIST_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
 const money = (value) => {
   const num = Number(value ?? 0);
   if (Number.isNaN(num)) return '0';
   return new Intl.NumberFormat('en-IN').format(num);
 };
 
-const roleName = (user) => user?.role || 'GUEST';
+const asArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.content)) return value.content;
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
+};
+
+const getRoleTokens = (user) => {
+  if (!user || typeof user !== 'object') return [];
+
+  const values = [
+    user.role,
+    user.userRole,
+    user.roleName,
+    user.type,
+    ...(Array.isArray(user.roles) ? user.roles : []),
+    ...(Array.isArray(user.authorities) ? user.authorities : []),
+  ];
+
+  const tokens = values
+    .flatMap((value) => {
+      if (!value) return [];
+      if (typeof value === 'string') return [value];
+      if (typeof value === 'object') return [value.authority, value.role, value.name].filter(Boolean);
+      return [];
+    })
+    .flatMap((item) => String(item).split(','))
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(tokens));
+};
+
+const roleName = (user) => getRoleTokens(user)[0] || 'GUEST';
 
 const parseImages = (value) =>
   value
@@ -34,9 +81,6 @@ const initialAuthForm = {
   login: { email: '', password: '' },
   register: { name: '', email: '', password: '', phone: '', address: '' },
 };
-
-const SHOPYRA_LOGO_URL =
-  'https://dummyimage.com/240x240/111111/ffffff&text=SHOPYRA';
 
 const promoSlides = [
   {
@@ -122,7 +166,7 @@ const trendSlides = [
   },
 ];
 
-const headerFeatures = ['New Arrivals', 'Top Picks', 'Express Delivery', 'Style Guide'];
+const headerFeatures = ['Men', 'Women', 'Kids', 'Beauty', 'Home'];
 
 const loadRazorpayScript = () =>
   new Promise((resolve) => {
@@ -139,6 +183,7 @@ const loadRazorpayScript = () =>
   });
 
 function App() {
+  const { confirm, ConfirmDialog } = useConfirm();
   const [auth, setAuthState] = useState(readAuth);
   const [activeView, setActiveView] = useState('shop');
   const [loading, setLoading] = useState(false);
@@ -146,6 +191,11 @@ function App() {
 
   const [categories, setCategories] = useState([]);
   const [productsPage, setProductsPage] = useState({ content: [], number: 0, totalPages: 0 });
+  const [isProductsLoading, setIsProductsLoading] = useState(false);
+  const [wishlist, setWishlist] = useState(readWishlist);
+  const [quickViewProduct, setQuickViewProduct] = useState(null);
+  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [cart, setCart] = useState(null);
   const [myOrdersPage, setMyOrdersPage] = useState({ content: [] });
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -207,32 +257,92 @@ function App() {
     }
   };
 
-  const isAdmin = String(roleName(auth.user)).toUpperCase().includes('ADMIN');
+  const isAdmin = getRoleTokens(auth.user).some((role) => role.toUpperCase().includes('ADMIN'));
   const isLoggedIn = Boolean(auth.accessToken);
 
   const fetchCategories = async () => {
     const res = await api.categories.list();
-    setCategories(res.data || []);
+    const list = asArray(res?.data);
+    if (list.length > 0) {
+      setCategories(list);
+      return list;
+    }
+    return [];
   };
 
   const fetchProducts = async (overrides = {}) => {
     const next = { ...productFilter, ...overrides };
-    let res;
-    if (next.q) {
-      res = await api.products.search({ q: next.q, page: next.page, size: next.size });
-    } else if (next.categoryId) {
-      res = await api.products.getByCategory(next.categoryId, { page: next.page, size: next.size });
-    } else {
-      res = await api.products.list({ page: next.page, size: next.size, sortBy: next.sortBy, sortDir: next.sortDir });
+    setIsProductsLoading(true);
+    try {
+      let res;
+      if (next.q) {
+        res = await api.products.search({ q: next.q, page: next.page, size: next.size });
+      } else if (next.categoryId) {
+        res = await api.products.getByCategory(next.categoryId, { page: next.page, size: next.size });
+      } else {
+        res = await api.products.list({ page: next.page, size: next.size, sortBy: next.sortBy, sortDir: next.sortDir });
+      }
+      setProductFilter(next);
+      const nextPage = res.data || { content: [] };
+      setProductsPage(nextPage);
+      setCategories((prev) => {
+        if (Array.isArray(prev) && prev.length > 0) return prev;
+        const fromProducts = (nextPage?.content || [])
+          .map((product) => product?.category)
+          .filter((category) => category?.id && category?.name);
+        if (fromProducts.length === 0) return prev;
+        const unique = [];
+        const seen = new Set();
+        fromProducts.forEach((category) => {
+          const key = String(category.id);
+          if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(category);
+          }
+        });
+        return unique;
+      });
+    } finally {
+      setIsProductsLoading(false);
     }
-    setProductFilter(next);
-    setProductsPage(res.data || { content: [] });
+  };
+
+  const normalizeCartPayload = async (payload) => {
+    if (!payload) return null;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+
+    const normalizedItems = await Promise.all(
+      items.map(async (item) => {
+        const productId =
+          item?.product?.id ||
+          item?.productId ||
+          item?.product?.productId ||
+          null;
+
+        if (item?.product || !productId) return item;
+
+        const fromVisibleProducts = (productsPage?.content || []).find(
+          (product) => String(product.id) === String(productId),
+        );
+        if (fromVisibleProducts) return { ...item, product: fromVisibleProducts };
+
+        try {
+          const productRes = await api.products.getById(productId);
+          return { ...item, product: productRes?.data || null };
+        } catch {
+          return item;
+        }
+      }),
+    );
+
+    return { ...payload, items: normalizedItems };
   };
 
   const fetchCart = async () => {
     if (!isLoggedIn) return;
     const res = await api.cart.get();
-    setCart(res.data || null);
+    const normalized = await normalizeCartPayload(res.data || null);
+    setCart(normalized);
   };
 
   const fetchMyOrders = async () => {
@@ -278,10 +388,16 @@ function App() {
   };
 
   useEffect(() => {
-    fetchCategories().catch(() => {});
+    fetchCategories().catch((error) => {
+      setNotice({ type: 'error', text: error?.message || 'Unable to load categories.' });
+    });
     fetchProducts().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(WISHLIST_KEY, JSON.stringify(wishlist));
+  }, [wishlist]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -327,6 +443,29 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const query = String(productFilter.q || '').trim();
+    if (query.length < 2) {
+      setSearchSuggestions([]);
+      setSuggestionsLoading(false);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        setSuggestionsLoading(true);
+        const res = await api.products.search({ q: query, page: 0, size: 5 });
+        setSearchSuggestions(res.data?.content || []);
+      } catch {
+        setSearchSuggestions([]);
+      } finally {
+        setSuggestionsLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [api.products, productFilter.q]);
+
   const onLogin = async (event) => {
     event.preventDefault();
     const res = await run(() => api.auth.login(authForm.login), 'Signed in successfully.');
@@ -349,8 +488,29 @@ function App() {
   };
 
   const onAddProductToCart = async (productId, quantity = 1) => {
-    await run(() => api.cart.addItem({ productId: Number(productId), quantity: Number(quantity) }), 'Added to bag.');
-    await fetchCart();
+    const res = await run(() => api.cart.addItem({ productId: Number(productId), quantity: Number(quantity) }), 'Added to bag.');
+    const normalized = await normalizeCartPayload(res.data || null);
+    if (normalized) setCart(normalized);
+    else await fetchCart();
+  };
+
+  const onToggleWishlist = (productId) => {
+    setWishlist((prev) =>
+      prev.includes(productId)
+        ? prev.filter((item) => item !== productId)
+        : [...prev, productId],
+    );
+  };
+
+  const onSearchSubmit = (event) => {
+    event.preventDefault();
+    run(() => fetchProducts({ page: 0 }), 'Products loaded.').catch(() => {});
+  };
+
+  const onSearchSuggestionSelect = (item) => {
+    changeFilter({ q: item.name, page: 0 });
+    run(() => fetchProducts({ q: item.name, page: 0 }), `${item.name} loaded.`).catch(() => {});
+    setSearchSuggestions([]);
   };
 
   const onUpdateProfile = async (event) => {
@@ -371,17 +531,33 @@ function App() {
   };
 
   const onUpdateCartItem = async (productId, quantity) => {
-    await run(() => api.cart.updateItem(productId, { quantity: Number(quantity) }), 'Cart updated.');
-    await fetchCart();
+    const res = await run(() => api.cart.updateItem(productId, { quantity: Number(quantity) }), 'Cart updated.');
+    const normalized = await normalizeCartPayload(res.data || null);
+    if (normalized) setCart(normalized);
+    else await fetchCart();
   };
 
   const onRemoveCartItem = async (productId) => {
-    await run(() => api.cart.removeItem(productId), 'Item removed.');
-    await fetchCart();
+    const ok = await confirm({
+      title: 'Remove Item?',
+      message: 'This item will be removed from your bag.',
+      confirmText: 'Remove',
+    });
+    if (!ok) return;
+    const res = await run(() => api.cart.removeItem(productId), 'Item removed.');
+    const normalized = await normalizeCartPayload(res.data || null);
+    if (normalized) setCart(normalized);
+    else await fetchCart();
   };
   const onClearCart = async () => {
+    const ok = await confirm({
+      title: 'Clear Bag?',
+      message: 'All items in your bag will be removed.',
+      confirmText: 'Clear Bag',
+    });
+    if (!ok) return;
     await run(() => api.cart.clear(), 'Bag cleared.');
-    await fetchCart();
+    setCart((prev) => (prev ? { ...prev, items: [], total: 0, itemCount: 0 } : null));
   };
 
   const createOrderInternal = async () => {
@@ -412,6 +588,12 @@ function App() {
   };
 
   const onCancelOrder = async (orderId) => {
+    const ok = await confirm({
+      title: 'Cancel Order?',
+      message: `Order #${orderId} will be cancelled.`,
+      confirmText: 'Cancel Order',
+    });
+    if (!ok) return;
     await run(() => api.orders.cancel(orderId), 'Order cancelled.');
     await fetchMyOrders();
   };
@@ -548,6 +730,12 @@ function App() {
   };
 
   const onAdminDeleteUser = async () => {
+    const ok = await confirm({
+      title: 'Delete User?',
+      message: 'This will permanently remove the user account.',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     await run(() => api.admin.deleteUser(adminUserId), 'User deleted.');
     await fetchAdminData();
   };
@@ -583,6 +771,12 @@ function App() {
   };
 
   const onDeleteCategory = async () => {
+    const ok = await confirm({
+      title: 'Delete Category?',
+      message: 'This will delete the category. Make sure products are reassigned first.',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     await run(() => api.categories.remove(Number(categoryForm.id)), 'Category deleted.');
     await fetchCategories();
   };
@@ -607,23 +801,94 @@ function App() {
   };
 
   const onUpdateProduct = async () => {
-    await run(() => api.products.update(Number(adminProductForm.id), productPayload), 'Product updated.');
+    const productId = Number(adminProductForm.id);
+    if (!productId || Number.isNaN(productId)) {
+      setNotice({ type: 'error', text: 'Enter a valid Product ID first.' });
+      return;
+    }
+    await run(() => api.products.update(productId, productPayload), 'Product updated.');
     await Promise.all([fetchProducts(), fetchAdminData()]);
   };
 
   const onSoftDeleteProduct = async () => {
-    await run(() => api.products.softDelete(Number(adminProductForm.id)), 'Product deactivated.');
+    const ok = await confirm({
+      title: 'Deactivate Product?',
+      message: 'Product will be hidden from shoppers but can be restored later.',
+      confirmText: 'Deactivate',
+    });
+    if (!ok) return;
+    const productId = Number(adminProductForm.id);
+    if (!productId || Number.isNaN(productId)) {
+      setNotice({ type: 'error', text: 'Enter a valid Product ID first.' });
+      return;
+    }
+    await run(() => api.products.softDelete(productId), 'Product deactivated.');
     await Promise.all([fetchProducts(), fetchAdminData()]);
   };
 
   const onHardDeleteProduct = async () => {
-    await run(() => api.products.hardDelete(Number(adminProductForm.id)), 'Product permanently deleted.');
+    const ok = await confirm({
+      title: 'Hard Delete Product?',
+      message: 'This permanently removes product data and cannot be undone.',
+      confirmText: 'Delete Permanently',
+    });
+    if (!ok) return;
+    const productId = Number(adminProductForm.id);
+    if (!productId || Number.isNaN(productId)) {
+      setNotice({ type: 'error', text: 'Enter a valid Product ID first.' });
+      return;
+    }
+    await run(() => api.products.hardDelete(productId), 'Product permanently deleted.');
     await Promise.all([fetchProducts(), fetchAdminData()]);
   };
 
   const onRestoreProduct = async () => {
-    await run(() => api.products.restore(Number(adminProductForm.id)), 'Product restored.');
+    const productId = Number(adminProductForm.id);
+    if (!productId || Number.isNaN(productId)) {
+      setNotice({ type: 'error', text: 'Enter a valid Product ID first.' });
+      return;
+    }
+    await run(() => api.products.restore(productId), 'Product restored.');
     await Promise.all([fetchProducts(), fetchAdminData()]);
+  };
+
+  const onSoftDeleteProductById = async (productId) => {
+    const ok = await confirm({
+      title: 'Deactivate Product?',
+      message: `Deactivate product #${productId}?`,
+      confirmText: 'Deactivate',
+    });
+    if (!ok) return;
+    await run(() => api.products.softDelete(Number(productId)), 'Product deactivated.');
+    await Promise.all([fetchProducts(), fetchAdminData()]);
+  };
+
+  const onHardDeleteProductById = async (productId) => {
+    const ok = await confirm({
+      title: 'Hard Delete Product?',
+      message: `Permanently delete product #${productId}?`,
+      confirmText: 'Delete Permanently',
+    });
+    if (!ok) return;
+    await run(() => api.products.hardDelete(Number(productId)), 'Product permanently deleted.');
+    await Promise.all([fetchProducts(), fetchAdminData()]);
+  };
+
+  const onPickAdminProduct = (product) => {
+    setAdminProductForm({
+      id: String(product.id || ''),
+      name: product.name || '',
+      description: product.description || '',
+      sku: product.sku || '',
+      price: product.price ?? '',
+      discountPrice: product.discountPrice ?? '',
+      stock: product.stock ?? '',
+      imageUrl: product.imageUrl || '',
+      imagesCsv: Array.isArray(product.images) ? product.images.join(', ') : '',
+      categoryId: product.category?.id ? String(product.category.id) : '',
+      active: Boolean(product.active),
+    });
+    setNotice({ type: 'info', text: `Selected product #${product.id} for actions.` });
   };
 
   const onAdminUpdateOrderStatus = async (event) => {
@@ -640,10 +905,36 @@ function App() {
     orders: adminOrdersPage?.content?.length || 0,
   };
   const firstName = auth.user?.name?.split(' ')?.[0] || 'Guest';
+  const categoryTree = useMemo(() => {
+    const list = Array.isArray(categories) ? categories : [];
+    const byParent = new Map();
+    list.forEach((category) => {
+      const key = category.parentId == null ? 'root' : String(category.parentId);
+      const bucket = byParent.get(key) || [];
+      bucket.push(category);
+      byParent.set(key, bucket);
+    });
+    return {
+      root: byParent.get('root') || [],
+      byParent,
+    };
+  }, [categories]);
+
   const userStats = {
     bagItems: cart?.itemCount || 0,
     totalOrders: myOrdersPage?.content?.length || 0,
     paidOrders: (myOrdersPage?.content || []).filter((item) => item.paid).length,
+  };
+
+  const onSelectCategoryForEdit = (category) => {
+    setCategoryForm({
+      id: String(category.id || ''),
+      name: category.name || '',
+      slug: category.slug || '',
+      description: category.description || '',
+      parentId: category.parentId ? String(category.parentId) : '',
+    });
+    setNotice({ type: 'info', text: `Selected category #${category.id} for update.` });
   };
 
   return (
@@ -651,20 +942,18 @@ function App() {
       <header className="header">
         <div className="header-top">
           <div className="brand-wrap">
-            <img className="brand-logo-img" src={SHOPYRA_LOGO_URL} alt="Shopyra logo" />
             <div>
-              <p className="brand-name">SHOPYRA</p>
-              <p className="brand-sub">Fashion that moves with you</p>
+              <p className="brand-name">S H O P Y R A</p>
+              <p className="brand-sub">STYLE . QUALITY . INDIA</p>
             </div>
           </div>
-          <p className="header-user-chip">{isLoggedIn ? `Hi, ${firstName}` : 'Guest Mode'}</p>
+          <div className="header-top-right">
+            <p className="ui-version-badge">UI V2</p>
+            <p className="header-user-chip">{isLoggedIn ? `Hi, ${firstName}` : 'Guest Mode'}</p>
+          </div>
         </div>
         <div className="header-main">
-          <div className="header-nav">
-            <button type="button" className={activeView === 'shop' ? 'nav-btn active' : 'nav-btn'} onClick={() => setActiveView('shop')}>Shop</button>
-            <button type="button" className={activeView === 'user' ? 'nav-btn active' : 'nav-btn'} onClick={() => setActiveView('user')} disabled={!isLoggedIn}>Profile</button>
-            <button type="button" className={activeView === 'admin' ? 'nav-btn active' : 'nav-btn'} onClick={() => setActiveView('admin')} disabled={!isAdmin}>Admin</button>
-          </div>
+          <Navbar activeView={activeView} setActiveView={setActiveView} isLoggedIn={isLoggedIn} isAdmin={isAdmin} />
           <div className="feature-nav">
             {headerFeatures.map((feature) => (
               <button type="button" className="feature-pill" key={feature} onClick={() => setActiveView('shop')}>{feature}</button>
@@ -679,168 +968,37 @@ function App() {
       <div className={`toast ${notice.type}`}>{loading ? 'Processing your request...' : notice.text}</div>
 
       {activeView === 'shop' && (
-        <>
-          <section className="promo-slider">
-            <div
-              className="promo-slide"
-              style={{ backgroundImage: `url(${promoSlides[currentSlide].image})` }}
-            >
-              <div className="promo-overlay">
-                <p>ONLINE BANNER</p>
-                <h3>{promoSlides[currentSlide].title}</h3>
-                <span>{promoSlides[currentSlide].subtitle}</span>
-              </div>
-            </div>
-            <div className="promo-controls">
-              {promoSlides.map((slide, index) => (
-                <button
-                  type="button"
-                  key={slide.title}
-                  className={index === currentSlide ? 'dot active-dot' : 'dot'}
-                  onClick={() => setCurrentSlide(index)}
-                  aria-label={`Slide ${index + 1}`}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="trend-slider">
-            <div
-              className="trend-slide"
-              style={{ backgroundImage: `url(${trendSlides[currentTrendSlide].image})` }}
-            >
-              <div className="trend-overlay">
-                <p>FASHION STORIES</p>
-                <h3>{trendSlides[currentTrendSlide].title}</h3>
-                <span>{trendSlides[currentTrendSlide].subtitle}</span>
-                <button type="button" className="trend-cta">Shop This Look</button>
-              </div>
-            </div>
-            <div className="trend-controls">
-              {trendSlides.map((slide, index) => (
-                <button
-                  type="button"
-                  key={slide.title}
-                  className={index === currentTrendSlide ? 'trend-dot active-trend-dot' : 'trend-dot'}
-                  onClick={() => setCurrentTrendSlide(index)}
-                  aria-label={`Trend slide ${index + 1}`}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="hero">
-            <div>
-              <p className="hero-kicker">NEW DROP</p>
-              <h2>Curated trends, live pricing, instant checkout flow</h2>
-              <p>
-                Browse products, filter by category, add to bag, place orders, and verify payments.
-                Every action is connected to your Spring Boot API.
-              </p>
-              <div className="hero-actions">
-                <button type="button" onClick={() => run(async () => Promise.all([fetchCategories(), fetchProducts()]), 'Store refreshed.').catch(() => {})}>Refresh Store</button>
-                {!isLoggedIn && <button type="button" className="ghost" onClick={() => setActiveView('auth')}>Create account</button>}
-              </div>
-            </div>
-            <div className="hero-metrics">
-              <div><span>{productsPage?.content?.length || 0}</span><p>Visible products</p></div>
-              <div><span>{categories.length}</span><p>Categories</p></div>
-              <div><span>{cart?.itemCount || 0}</span><p>Bag items</p></div>
-            </div>
-          </section>
-
-          <section className="shop-layout">
-            <aside className="panel">
-              <h3>Filters</h3>
-              <div className="field">
-                <label>Search</label>
-                <input value={productFilter.q} onChange={(e) => changeFilter({ q: e.target.value, page: 0 })} placeholder="Sneakers, shirt, jacket..." />
-              </div>
-              <div className="field">
-                <label>Category</label>
-                <select value={productFilter.categoryId} onChange={(e) => changeFilter({ categoryId: e.target.value, page: 0 })}>
-                  <option value="">All categories</option>
-                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                </select>
-              </div>
-              <div className="field">
-                <label>Sort by</label>
-                <select value={productFilter.sortBy} onChange={(e) => changeFilter({ sortBy: e.target.value })}>
-                  <option value="createdAt">Newest</option>
-                  <option value="price">Price</option>
-                  <option value="name">Name</option>
-                </select>
-              </div>
-              <div className="field">
-                <label>Direction</label>
-                <select value={productFilter.sortDir} onChange={(e) => changeFilter({ sortDir: e.target.value })}>
-                  <option value="desc">Descending</option>
-                  <option value="asc">Ascending</option>
-                </select>
-              </div>
-              <button type="button" onClick={() => run(() => fetchProducts({ page: 0 }), 'Products loaded.').catch(() => {})}>Apply Filters</button>
-            </aside>
-
-            <div className="products-wrap">
-              <div className="category-rail">
-                <button type="button" onClick={() => { changeFilter({ categoryId: '', page: 0 }); run(() => fetchProducts({ categoryId: '', page: 0 }), 'Category reset.').catch(() => {}); }}>All</button>
-                {categories.map((cat) => (
-                  <button
-                    type="button"
-                    key={cat.id}
-                    className={String(productFilter.categoryId) === String(cat.id) ? 'active-chip' : ''}
-                    onClick={() => {
-                      changeFilter({ categoryId: String(cat.id), page: 0 });
-                      run(() => fetchProducts({ categoryId: String(cat.id), page: 0 }), `${cat.name} loaded.`).catch(() => {});
-                    }}
-                  >
-                    {cat.name}
-                  </button>
-                ))}
-              </div>
-
-              <div className="products-grid">
-                {(productsPage?.content || []).map((product) => {
-                  const price = product.discountPrice || product.price;
-                  const imageUrl =
-                    product.imageUrl ||
-                    product.images?.[0] ||
-                    `https://picsum.photos/seed/shopyra-${product.id}/900/1200`;
-                  return (
-                    <article key={product.id} className="product-card">
-                      <div className="product-image" style={{ backgroundImage: `url(${imageUrl})` }}>
-                        {!product.imageUrl && !(product.images?.[0]) && <span>Online image</span>}
-                      </div>
-                      <div className="product-body">
-                        <p className="product-category">{product.category?.name || 'General'}</p>
-                        <h4>{product.name}</h4>
-                        <p className="muted">{product.description || 'Premium quality product.'}</p>
-                        <div className="price-line">
-                          <strong>INR {money(price)}</strong>
-                          {product.discountPrice && <span>INR {money(product.price)}</span>}
-                        </div>
-                        <div className="stock-line">Stock: {product.stock} | SKU: {product.sku}</div>
-                        <button
-                          type="button"
-                          disabled={!isLoggedIn || product.stock <= 0}
-                          onClick={() => onAddProductToCart(product.id, 1).catch(() => {})}
-                        >
-                          {isLoggedIn ? 'Add to Bag' : 'Login to Buy'}
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-
-              <div className="pager">
-                <button type="button" disabled={(productsPage?.number || 0) <= 0} onClick={() => run(() => fetchProducts({ page: (productsPage?.number || 0) - 1 }), 'Moved to previous page.').catch(() => {})}>Prev</button>
-                <p>Page {(productsPage?.number || 0) + 1} / {productsPage?.totalPages || 1}</p>
-                <button type="button" disabled={(productsPage?.number || 0) >= (productsPage?.totalPages || 1) - 1} onClick={() => run(() => fetchProducts({ page: (productsPage?.number || 0) + 1 }), 'Moved to next page.').catch(() => {})}>Next</button>
-              </div>
-            </div>
-          </section>
-        </>
+        <Suspense fallback={<section className="panel"><Skeleton className="page-skeleton" /></section>}>
+          <ShopPage
+            isLoggedIn={isLoggedIn}
+            promoSlides={promoSlides}
+            trendSlides={trendSlides}
+            currentSlide={currentSlide}
+            setCurrentSlide={setCurrentSlide}
+            currentTrendSlide={currentTrendSlide}
+            setCurrentTrendSlide={setCurrentTrendSlide}
+            categories={categories}
+            productFilter={productFilter}
+            changeFilter={changeFilter}
+            run={run}
+            fetchCategories={fetchCategories}
+            fetchProducts={fetchProducts}
+            productsPage={productsPage}
+            money={money}
+            onAddProductToCart={onAddProductToCart}
+            isProductsLoading={isProductsLoading}
+            wishlist={wishlist}
+            onToggleWishlist={onToggleWishlist}
+            quickViewProduct={quickViewProduct}
+            setQuickViewProduct={setQuickViewProduct}
+            searchSuggestions={searchSuggestions}
+            suggestionsLoading={suggestionsLoading}
+            onSearchChange={(value) => changeFilter({ q: value, page: 0 })}
+            onSearchSubmit={onSearchSubmit}
+            onSearchSuggestionSelect={onSearchSuggestionSelect}
+            cart={cart}
+          />
+        </Suspense>
       )}
       {activeView === 'auth' && (
         <section className="auth-grid">
@@ -910,18 +1068,48 @@ function App() {
             </form>
 
             <div className="mini-list">
-              {(cart?.items || []).map((item) => (
-                <div key={item.id} className="mini-item">
-                  <div>
-                    <strong>{item.product?.name}</strong>
-                    <p>Subtotal: INR {money(item.subtotal)}</p>
+              {(cart?.items || []).length === 0 && (
+                <p className="muted">No products in your bag yet. Add from Shop and they will appear here.</p>
+              )}
+              {(cart?.items || []).map((item) => {
+                const fallbackProductId =
+                  item?.product?.id ||
+                  item?.productId ||
+                  item?.product?.productId ||
+                  null;
+                const productFromGrid = (productsPage?.content || []).find(
+                  (p) => String(p.id) === String(fallbackProductId),
+                );
+                const displayProduct =
+                  item.product ||
+                  productFromGrid ||
+                  {
+                    id: fallbackProductId,
+                    name: item.productName || item.name || `Product #${fallbackProductId || ''}`.trim(),
+                    imageUrl: item.imageUrl || '',
+                    images: item.images || [],
+                  };
+
+                const bagImage =
+                  displayProduct?.imageUrl ||
+                  displayProduct?.images?.[0] ||
+                  `https://picsum.photos/seed/shopyra-bag-${displayProduct?.id || item.id}/400/500`;
+                return (
+                  <div key={item.id} className="mini-item">
+                    <div className="bag-item-main">
+                      <img src={bagImage} alt={displayProduct?.name || 'Bag product'} className="bag-item-thumb" loading="lazy" decoding="async" />
+                      <div>
+                        <strong>{displayProduct?.name}</strong>
+                        <p>Qty: {item.quantity} | Subtotal: INR {money(item.subtotal)}</p>
+                      </div>
+                    </div>
+                    <div className="mini-actions">
+                      <input type="number" min="0" defaultValue={item.quantity} onBlur={(e) => onUpdateCartItem(displayProduct?.id, e.target.value).catch(() => {})} />
+                      <button type="button" className="ghost" onClick={() => onRemoveCartItem(displayProduct?.id).catch(() => {})}>Remove</button>
+                    </div>
                   </div>
-                  <div className="mini-actions">
-                    <input type="number" min="0" defaultValue={item.quantity} onBlur={(e) => onUpdateCartItem(item.product?.id, e.target.value).catch(() => {})} />
-                    <button type="button" className="ghost" onClick={() => onRemoveCartItem(item.product?.id).catch(() => {})}>Remove</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <p className="summary">Total: INR {money(cart?.total)} | Items: {cart?.itemCount || 0}</p>
           </article>
@@ -1064,14 +1252,52 @@ function App() {
                   <input placeholder="Name" value={categoryForm.name} onChange={(e) => setCategoryForm((prev) => ({ ...prev, name: e.target.value }))} required />
                   <input placeholder="Slug" value={categoryForm.slug} onChange={(e) => setCategoryForm((prev) => ({ ...prev, slug: e.target.value }))} required />
                   <input placeholder="Description" value={categoryForm.description} onChange={(e) => setCategoryForm((prev) => ({ ...prev, description: e.target.value }))} />
-                  <input placeholder="Parent ID" value={categoryForm.parentId} onChange={(e) => setCategoryForm((prev) => ({ ...prev, parentId: e.target.value }))} />
+                  <select value={categoryForm.parentId} onChange={(e) => setCategoryForm((prev) => ({ ...prev, parentId: e.target.value }))}>
+                    <option value="">No Parent (Root Category)</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        #{category.id} {category.name}
+                      </option>
+                    ))}
+                  </select>
                   <button type="submit">Create category</button>
                 </form>
                 <form className="inline-form" onSubmit={onUpdateCategory}>
                   <input placeholder="Category ID" value={categoryForm.id} onChange={(e) => setCategoryForm((prev) => ({ ...prev, id: e.target.value }))} required />
+                  <select value={categoryForm.parentId} onChange={(e) => setCategoryForm((prev) => ({ ...prev, parentId: e.target.value }))}>
+                    <option value="">No Parent</option>
+                    {categories
+                      .filter((category) => String(category.id) !== String(categoryForm.id))
+                      .map((category) => (
+                        <option key={category.id} value={category.id}>
+                          #{category.id} {category.name}
+                        </option>
+                      ))}
+                  </select>
                   <button type="submit">Update</button>
                   <button type="button" className="ghost" onClick={onDeleteCategory}>Delete</button>
                 </form>
+                <div className="category-tree">
+                  <p className="muted">Parent / Child Category Tree</p>
+                  {categoryTree.root.length === 0 && <p className="muted">No categories created yet.</p>}
+                  {categoryTree.root.map((parent) => (
+                    <div key={parent.id} className="category-node">
+                      <button type="button" className="category-node-btn" onClick={() => onSelectCategoryForEdit(parent)}>
+                        Parent: #{parent.id} {parent.name}
+                      </button>
+                      <div className="category-children">
+                        {(categoryTree.byParent.get(String(parent.id)) || []).length === 0 && (
+                          <p className="muted">No child categories</p>
+                        )}
+                        {(categoryTree.byParent.get(String(parent.id)) || []).map((child) => (
+                          <button key={child.id} type="button" className="category-child-btn" onClick={() => onSelectCategoryForEdit(child)}>
+                            Child: #{child.id} {child.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </article>
 
               <article className="kpanel kpanel-wide">
@@ -1098,7 +1324,21 @@ function App() {
                 </form>
                 <div className="mini-list compact">
                   {(adminProductsPage?.content || []).map((product) => (
-                    <p key={product.id}>#{product.id} {product.name} | {product.sku} | {product.active ? 'ACTIVE' : 'INACTIVE'}</p>
+                    <div key={product.id} className="mini-item">
+                      <div>
+                        <strong>#{product.id} {product.name}</strong>
+                        <p>{product.sku} | {product.active ? 'ACTIVE' : 'INACTIVE'}</p>
+                      </div>
+                      <div className="mini-actions">
+                        <button type="button" onClick={() => onPickAdminProduct(product)}>Select</button>
+                        <button type="button" className="ghost" onClick={() => onSoftDeleteProductById(product.id).catch(() => {})}>
+                          Soft Delete
+                        </button>
+                        <button type="button" className="ghost" onClick={() => onHardDeleteProductById(product.id).catch(() => {})}>
+                          Hard Delete
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </article>
@@ -1132,6 +1372,7 @@ function App() {
           <button type="button" onClick={() => setActiveView('auth')}>Go to Sign In</button>
         </section>
       )}
+      <ConfirmDialog />
     </div>
   );
 }

@@ -1,4 +1,9 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
+const normalizeApiBaseUrl = (raw) => String(raw || 'http://localhost:8080')
+  .trim()
+  .replace(/\/$/, '')
+  .replace(/\/api$/, '');
+
+const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 const toQueryString = (params = {}) => {
   const entries = Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '');
