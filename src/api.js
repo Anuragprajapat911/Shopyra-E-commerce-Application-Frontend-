@@ -77,6 +77,8 @@ export function createApiClient({ getAuth, setAuth, clearAuth }) {
       register: (body) => request('/api/auth/register', { method: 'POST', body }),
       login: (body) => request('/api/auth/login', { method: 'POST', body }),
       refresh: (body) => request('/api/auth/refresh', { method: 'POST', body }),
+      forgotPassword: (body) => request('/api/auth/forgot-password', { method: 'POST', body }),
+      resetPassword: (body) => request('/api/auth/reset-password', { method: 'POST', body }),
     },
     user: {
       me: () => request('/api/users/me'),

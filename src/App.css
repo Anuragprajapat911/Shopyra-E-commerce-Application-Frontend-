@@ -910,6 +910,10 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.auth-help {
+  margin-bottom: 8px;
+}
+
 .dashboard-grid,
 .admin-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));

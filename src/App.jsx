@@ -77,9 +77,29 @@ const parseImages = (value) =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+const extractResetToken = (payload) => {
+  if (!payload || typeof payload !== 'object') return '';
+
+  const directToken =
+    payload?.data?.token ||
+    payload?.data?.resetToken ||
+    payload?.token ||
+    payload?.resetToken ||
+    '';
+  if (typeof directToken === 'string' && directToken.trim()) return directToken.trim();
+
+  const message = String(payload?.message || payload?.data?.message || '');
+  const tokenMatch =
+    message.match(/reset token[:\s]+([A-Za-z0-9._-]+)/i) ||
+    message.match(/token[:\s]+([A-Za-z0-9._-]+)/i);
+  return tokenMatch?.[1] || '';
+};
+
 const initialAuthForm = {
   login: { email: '', password: '' },
   register: { name: '', email: '', password: '', phone: '', address: '' },
+  forgotPassword: { email: '' },
+  resetPassword: { token: '', newPassword: '' },
 };
 
 const promoSlides = [
@@ -466,6 +486,33 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [api.products, productFilter.q]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+    const tokenFromUrl =
+      params.get('token') ||
+      params.get('resetToken') ||
+      hashParams.get('token') ||
+      hashParams.get('resetToken') ||
+      '';
+
+    const isResetPath = String(window.location.pathname || '').toLowerCase().includes('reset-password');
+    if (!tokenFromUrl && !isResetPath) return;
+
+    setActiveView('auth');
+
+    if (tokenFromUrl) {
+      setAuthForm((prev) => ({
+        ...prev,
+        resetPassword: {
+          ...prev.resetPassword,
+          token: tokenFromUrl,
+        },
+      }));
+    }
+  }, []);
+
   const onLogin = async (event) => {
     event.preventDefault();
     const res = await run(() => api.auth.login(authForm.login), 'Signed in successfully.');
@@ -480,6 +527,35 @@ function App() {
     setAuth({ accessToken: res.data.accessToken, refreshToken: res.data.refreshToken, user: res.data.user });
     setAuthForm(initialAuthForm);
     setActiveView('shop');
+  };
+
+  const onForgotPassword = async (event) => {
+    event.preventDefault();
+    const res = await run(() => api.auth.forgotPassword(authForm.forgotPassword), 'If this email exists, a reset token was sent.');
+    const token = extractResetToken(res);
+    if (token) {
+      setAuthForm((prev) => ({
+        ...prev,
+        resetPassword: {
+          ...prev.resetPassword,
+          token,
+        },
+      }));
+      setNotice({ type: 'success', text: `Reset token received: ${token}` });
+    } else {
+      setNotice({ type: 'info', text: 'No token in API response. Check your email or backend mail config.' });
+    }
+    setAuthForm((prev) => ({ ...prev, forgotPassword: { email: '' } }));
+  };
+
+  const onResetPassword = async (event) => {
+    event.preventDefault();
+    await run(() => api.auth.resetPassword(authForm.resetPassword), 'Password reset successful. Please sign in.');
+    setAuthForm((prev) => ({
+      ...prev,
+      resetPassword: { token: '', newPassword: '' },
+      login: { ...prev.login, password: '' },
+    }));
   };
 
   const onLogout = () => {
@@ -1017,6 +1093,38 @@ function App() {
             <input placeholder="Phone" value={authForm.register.phone} onChange={(e) => setAuthForm((prev) => ({ ...prev, register: { ...prev.register, phone: e.target.value } }))} />
             <input placeholder="Address" value={authForm.register.address} onChange={(e) => setAuthForm((prev) => ({ ...prev, register: { ...prev.register, address: e.target.value } }))} />
             <button type="submit">Register</button>
+          </form>
+
+          <form className="panel" onSubmit={onForgotPassword}>
+            <h3>Forgot Password</h3>
+            <p className="muted auth-help">Enter your email to receive a reset token.</p>
+            <input
+              type="email"
+              placeholder="Email"
+              value={authForm.forgotPassword.email}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, forgotPassword: { email: e.target.value } }))}
+              required
+            />
+            <button type="submit">Send reset token</button>
+          </form>
+
+          <form className="panel" onSubmit={onResetPassword}>
+            <h3>Reset Password</h3>
+            <p className="muted auth-help">Paste reset token from email and set a new password.</p>
+            <input
+              placeholder="Reset token"
+              value={authForm.resetPassword.token}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, resetPassword: { ...prev.resetPassword, token: e.target.value } }))}
+              required
+            />
+            <input
+              type="password"
+              placeholder="New password"
+              value={authForm.resetPassword.newPassword}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, resetPassword: { ...prev.resetPassword, newPassword: e.target.value } }))}
+              required
+            />
+            <button type="submit">Reset password</button>
           </form>
         </section>
       )}
