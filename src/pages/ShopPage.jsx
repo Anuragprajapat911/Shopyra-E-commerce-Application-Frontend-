@@ -1,18 +1,33 @@
-﻿import React from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import Button from '../components/ui/Button';
 import Skeleton from '../components/ui/Skeleton';
 import SearchBar from '../components/search/SearchBar';
 import ProductCard from '../components/product/ProductCard';
 import ProductQuickView from '../components/product/ProductQuickView';
 
+const HERO_SLIDES = [
+  {
+    image: 'https://images.unsplash.com/photo-1464863979621-258859e62245?auto=format&fit=crop&w=1800&q=80',
+    title: 'Minimal silhouettes for a modern wardrobe.',
+    subtitle: 'Shop elevated essentials curated from your live catalog and ready for instant checkout.',
+  },
+  {
+    image: 'https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=1800&q=80',
+    title: 'Classic tailoring with effortless edge.',
+    subtitle: 'Premium edits designed for everyday luxury and seasonal layering.',
+  },
+  {
+    image: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1800&q=80',
+    title: 'Timeless pieces. Fresh styling.',
+    subtitle: 'Discover statement-ready looks with clean forms and refined texture.',
+  },
+];
+
+const FALLBACK_IMAGE =
+  'https://images.unsplash.com/photo-1445205170230-053b83016050?auto=format&fit=crop&w=1200&q=80';
+
 export default function ShopPage({
   isLoggedIn,
-  promoSlides,
-  trendSlides,
-  currentSlide,
-  setCurrentSlide,
-  currentTrendSlide,
-  setCurrentTrendSlide,
   categories,
   productFilter,
   changeFilter,
@@ -34,117 +49,83 @@ export default function ShopPage({
   onSearchSuggestionSelect,
   cart,
 }) {
-  const wishlistCount = wishlist.length;
-  const wishlistProducts = (productsPage?.content || [])
-    .filter((item) => wishlist.includes(item.id))
-    .slice(0, 4);
+  const visibleProducts = productsPage?.content || [];
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((prev) => (prev + 1) % HERO_SLIDES.length);
+    }, 4200);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <>
-      <section className="promo-slider">
-        <div className="promo-slide" style={{ backgroundImage: `url(${promoSlides[currentSlide].image})` }}>
-          <div className="promo-overlay">
-            <p>SEASON EDIT</p>
-            <h3>{promoSlides[currentSlide].title}</h3>
-            <span>{promoSlides[currentSlide].subtitle}</span>
-          </div>
-        </div>
-        <div className="promo-controls">
-          {promoSlides.map((slide, index) => (
-            <button
-              type="button"
-              key={slide.title}
-              className={index === currentSlide ? 'dot active-dot' : 'dot'}
-              onClick={() => setCurrentSlide(index)}
-              aria-label={`Slide ${index + 1}`}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section className="trend-slider">
-        <div className="trend-slide" style={{ backgroundImage: `url(${trendSlides[currentTrendSlide].image})` }}>
-          <div className="trend-overlay">
-            <p>CURATED STORIES</p>
-            <h3>{trendSlides[currentTrendSlide].title}</h3>
-            <span>{trendSlides[currentTrendSlide].subtitle}</span>
-            <Button className="trend-cta" onClick={() => {}}>Explore Edit</Button>
-          </div>
-        </div>
-        <div className="trend-controls">
-          {trendSlides.map((slide, index) => (
-            <button
-              type="button"
-              key={slide.title}
-              className={index === currentTrendSlide ? 'trend-dot active-trend-dot' : 'trend-dot'}
-              onClick={() => setCurrentTrendSlide(index)}
-              aria-label={`Trend slide ${index + 1}`}
-            />
-          ))}
-        </div>
-      </section>
-
-      <section className="hero">
-        <div>
-          <p className="hero-kicker">THE NEW WAVE</p>
-          <h2>Own the now with timeless style and effortless discovery.</h2>
-          <p>Browse trend-led edits, save favorites, and shop in a clean flow designed for high intent buying.</p>
-          <div className="hero-actions">
-            <Button onClick={() => run(async () => Promise.all([fetchCategories(), fetchProducts()]), 'Store refreshed.').catch(() => {})}>
-              Refresh Store
-            </Button>
-            <Button variant="ghost" onClick={() => run(() => fetchProducts({ sortBy: 'price', sortDir: 'asc', page: 0 }), 'Budget picks loaded.').catch(() => {})}>
-              Budget Finds
-            </Button>
-          </div>
-        </div>
-        <div className="hero-metrics">
-          <div><span>{productsPage?.content?.length || 0}</span><p>Visible products</p></div>
-          <div><span>{categories.length}</span><p>Categories</p></div>
-          <div><span>{cart?.itemCount || 0}</span><p>Bag items</p></div>
-          <div><span>{wishlistCount}</span><p>Wishlist picks</p></div>
-        </div>
-      </section>
-
-      <section className="benefits-strip panel">
-        <article><strong>Express Dispatch</strong><span>Fast handoff on top styles</span></article>
-        <article><strong>14-Day Returns</strong><span>Easy return from profile section</span></article>
-        <article><strong>Personalized Feed</strong><span>Suggestions from your saved picks</span></article>
-      </section>
-
-      {wishlistProducts.length > 0 && (
-        <section className="wishlist-spotlight panel">
-          <div className="wishlist-spotlight-head">
-            <h3>Saved By You</h3>
-            <p>Jump back into products you liked.</p>
-          </div>
-          <div className="wishlist-mini-grid">
-            {wishlistProducts.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                className="wishlist-mini-card"
-                onClick={() => setQuickViewProduct(product)}
-              >
-                <img
-                  src={product.imageUrl || product.images?.[0] || `https://picsum.photos/seed/shopyra-${product.id}/900/1200`}
-                  alt={product.name}
-                  loading="lazy"
-                  decoding="async"
-                />
-                <div>
-                  <strong>{product.name}</strong>
-                  <span>INR {money(product.discountPrice || product.price)}</span>
+      <section className="lux-hero panel">
+        <div className="classic-slider">
+          {HERO_SLIDES.map((slide, index) => (
+            <div
+              key={slide.image}
+              className={index === activeSlide ? 'classic-slide active' : 'classic-slide'}
+              style={{ backgroundImage: `url(${slide.image})` }}
+            >
+              <div className="lux-hero-overlay">
+                <p>SHOPYRA LUXE EDIT</p>
+                <h2>{slide.title}</h2>
+                <span>{slide.subtitle}</span>
+                <div className="hero-actions">
+                  <Button onClick={() => run(async () => Promise.all([fetchCategories(), fetchProducts({ page: 0 })]), 'Store refreshed.').catch(() => {})}>
+                    Shop Collection
+                  </Button>
+                  <Button variant="ghost" onClick={() => run(() => fetchProducts({ sortBy: 'createdAt', sortDir: 'desc', page: 0 }), 'New arrivals loaded.').catch(() => {})}>
+                    New Arrivals
+                  </Button>
                 </div>
-              </button>
+              </div>
+            </div>
+          ))}
+
+          <button
+            type="button"
+            className="classic-arrow left"
+            onClick={() => setActiveSlide((prev) => (prev - 1 + HERO_SLIDES.length) % HERO_SLIDES.length)}
+            aria-label="Previous slide"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="classic-arrow right"
+            onClick={() => setActiveSlide((prev) => (prev + 1) % HERO_SLIDES.length)}
+            aria-label="Next slide"
+          >
+            ›
+          </button>
+
+          <div className="classic-dots">
+            {HERO_SLIDES.map((_, index) => (
+              <button
+                key={`hero-dot-${index}`}
+                type="button"
+                className={index === activeSlide ? 'classic-dot active' : 'classic-dot'}
+                onClick={() => setActiveSlide(index)}
+                aria-label={`Go to slide ${index + 1}`}
+              />
             ))}
           </div>
-        </section>
-      )}
+        </div>
+      </section>
+
+      <section className="panel stats-band">
+        <article><strong>{visibleProducts.length}</strong><span>Products</span></article>
+        <article><strong>{categories.length}</strong><span>Categories</span></article>
+        <article><strong>{cart?.itemCount || 0}</strong><span>Bag Items</span></article>
+        <article><strong>{wishlist.length}</strong><span>Wishlist</span></article>
+      </section>
 
       <section className="shop-layout">
-        <aside className="panel">
-          <h3>Filters</h3>
+        <aside className="panel filters-panel">
+          <h3>Refine</h3>
           <SearchBar
             value={productFilter.q}
             suggestions={searchSuggestions}
@@ -153,16 +134,15 @@ export default function ShopPage({
             onSubmit={onSearchSubmit}
             onSelectSuggestion={onSearchSuggestionSelect}
           />
+
           <div className="field">
             <label>Category</label>
             <select value={productFilter.categoryId} onChange={(e) => changeFilter({ categoryId: e.target.value, page: 0 })}>
               <option value="">All categories</option>
               {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
             </select>
-            {categories.length === 0 && (
-              <p className="muted">No categories found yet. Create categories in Admin or add products with categories.</p>
-            )}
           </div>
+
           <div className="field">
             <label>Sort by</label>
             <select value={productFilter.sortBy} onChange={(e) => changeFilter({ sortBy: e.target.value })}>
@@ -171,6 +151,7 @@ export default function ShopPage({
               <option value="name">Name</option>
             </select>
           </div>
+
           <div className="field">
             <label>Direction</label>
             <select value={productFilter.sortDir} onChange={(e) => changeFilter({ sortDir: e.target.value })}>
@@ -178,6 +159,7 @@ export default function ShopPage({
               <option value="asc">Ascending</option>
             </select>
           </div>
+
           <Button onClick={() => run(() => fetchProducts({ page: 0 }), 'Products loaded.').catch(() => {})}>Apply Filters</Button>
         </aside>
 
@@ -199,7 +181,7 @@ export default function ShopPage({
             ))}
           </div>
 
-          <div className="products-grid modern-grid">
+          <div className="products-grid modern-grid premium-grid">
             {isProductsLoading && (
               <>
                 <Skeleton className="product-skeleton" />
@@ -209,10 +191,10 @@ export default function ShopPage({
               </>
             )}
 
-            {!isProductsLoading && (productsPage?.content || []).map((product) => (
+            {!isProductsLoading && visibleProducts.map((product) => (
               <ProductCard
                 key={product.id}
-                product={product}
+                product={{ ...product, imageUrl: product.imageUrl || product.images?.[0] || FALLBACK_IMAGE }}
                 isLoggedIn={isLoggedIn}
                 money={money}
                 isWishlisted={wishlist.includes(product.id)}

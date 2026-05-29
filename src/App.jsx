@@ -1,5 +1,5 @@
 
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { createApiClient } from './api';
 import Skeleton from './components/ui/Skeleton';
@@ -8,6 +8,7 @@ import useConfirm from './hooks/useConfirm';
 
 const AUTH_KEY = 'shopyra_auth_v1';
 const WISHLIST_KEY = 'shopyra_wishlist_v1';
+const THEME_KEY = 'shopyra_theme_v1';
 const ShopPage = lazy(() => import('./pages/ShopPage'));
 
 const readAuth = () => {
@@ -28,6 +29,16 @@ const readWishlist = () => {
   } catch {
     return [];
   }
+};
+
+const readTheme = () => {
+  try {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === 'dark' || savedTheme === 'light') return savedTheme;
+  } catch {
+    // no-op
+  }
+  return 'light';
 };
 
 const money = (value) => {
@@ -186,7 +197,34 @@ const trendSlides = [
   },
 ];
 
-const headerFeatures = ['Men', 'Women', 'Kids', 'Beauty', 'Home'];
+const headerFeatures = ['New In', 'Women', 'Men', 'Accessories', 'Sale'];
+const headerFeatureIcons = {
+  'New In': (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M12 3l2.3 4.7L19 10l-4.7 2.3L12 17l-2.3-4.7L5 10l4.7-2.3L12 3z" fill="currentColor" />
+    </svg>
+  ),
+  Women: (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M12 2a6 6 0 110 12 6 6 0 010-12zm-1 13h2v3h3v2h-3v3h-2v-3H8v-2h3v-3z" fill="currentColor" />
+    </svg>
+  ),
+  Men: (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M14 3h7v7h-2V6.4l-4.2 4.2A6 6 0 1113.4 9L17.6 4H14V3zM9 10a4 4 0 100 8 4 4 0 000-8z" fill="currentColor" />
+    </svg>
+  ),
+  Accessories: (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M12 3a5 5 0 015 5v1h2v2h-2v7H7v-7H5V9h2V8a5 5 0 015-5zm-3 6h6V8a3 3 0 10-6 0v1z" fill="currentColor" />
+    </svg>
+  ),
+  Sale: (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M7 4h6l7 7-9 9-7-7V7l3-3zm-.5 4a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM9 15l6-6 1.4 1.4-6 6L9 15z" fill="currentColor" />
+    </svg>
+  ),
+};
 
 const loadRazorpayScript = () =>
   new Promise((resolve) => {
@@ -202,12 +240,35 @@ const loadRazorpayScript = () =>
     document.body.appendChild(script);
   });
 
+function useAddToBag({ api, run, normalizeCartPayload, fetchCart, setCart, setActiveView }) {
+  const [isAddingToBag, setIsAddingToBag] = useState(false);
+
+  const addToBag = useCallback(async (productId, quantity = 1) => {
+    setIsAddingToBag(true);
+    try {
+      const res = await run(
+        () => api.cart.addItem({ productId: Number(productId), quantity: Number(quantity) }),
+        'Added to bag.',
+      );
+      const normalized = await normalizeCartPayload(res.data || null);
+      if (normalized) setCart(normalized);
+      else await fetchCart();
+      setActiveView('user');
+    } finally {
+      setIsAddingToBag(false);
+    }
+  }, [api, run, normalizeCartPayload, fetchCart, setCart, setActiveView]);
+
+  return { addToBag, isAddingToBag };
+}
+
 function App() {
   const { confirm, ConfirmDialog } = useConfirm();
   const [auth, setAuthState] = useState(readAuth);
   const [activeView, setActiveView] = useState('shop');
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState({ type: 'info', text: 'Welcome to Shopyra.' });
+  const [theme, setTheme] = useState(readTheme);
 
   const [categories, setCategories] = useState([]);
   const [productsPage, setProductsPage] = useState({ content: [], number: 0, totalPages: 0 });
@@ -365,6 +426,15 @@ function App() {
     setCart(normalized);
   };
 
+  const { addToBag: onAddProductToCart, isAddingToBag } = useAddToBag({
+    api,
+    run,
+    normalizeCartPayload,
+    fetchCart,
+    setCart,
+    setActiveView,
+  });
+
   const fetchMyOrders = async () => {
     if (!isLoggedIn) return;
     const res = await api.orders.listMine({ page: 0, size: 20 });
@@ -418,6 +488,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem(WISHLIST_KEY, JSON.stringify(wishlist));
   }, [wishlist]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -563,13 +638,6 @@ function App() {
     setNotice({ type: 'success', text: 'Logged out.' });
   };
 
-  const onAddProductToCart = async (productId, quantity = 1) => {
-    const res = await run(() => api.cart.addItem({ productId: Number(productId), quantity: Number(quantity) }), 'Added to bag.');
-    const normalized = await normalizeCartPayload(res.data || null);
-    if (normalized) setCart(normalized);
-    else await fetchCart();
-  };
-
   const onToggleWishlist = (productId) => {
     setWishlist((prev) =>
       prev.includes(productId)
@@ -587,6 +655,43 @@ function App() {
     changeFilter({ q: item.name, page: 0 });
     run(() => fetchProducts({ q: item.name, page: 0 }), `${item.name} loaded.`).catch(() => {});
     setSearchSuggestions([]);
+  };
+
+  const onHeaderFeatureClick = (feature) => {
+    const normalized = String(feature || '').trim().toLowerCase();
+    setActiveView('shop');
+
+    if (normalized === 'new in') {
+      changeFilter({ q: '', categoryId: '', sortBy: 'createdAt', sortDir: 'desc', page: 0 });
+      run(
+        () => fetchProducts({ q: '', categoryId: '', sortBy: 'createdAt', sortDir: 'desc', page: 0 }),
+        'New arrivals loaded.',
+      ).catch(() => {});
+      return;
+    }
+
+    if (normalized === 'sale') {
+      changeFilter({ q: 'sale', categoryId: '', page: 0 });
+      run(() => fetchProducts({ q: 'sale', categoryId: '', page: 0 }), 'Sale products loaded.').catch(() => {});
+      return;
+    }
+
+    const matchedCategory = categories.find(
+      (category) => String(category?.name || '').trim().toLowerCase() === normalized,
+    );
+
+    if (matchedCategory?.id) {
+      const categoryId = String(matchedCategory.id);
+      changeFilter({ q: '', categoryId, page: 0 });
+      run(
+        () => fetchProducts({ q: '', categoryId, page: 0 }),
+        `${matchedCategory.name} products loaded.`,
+      ).catch(() => {});
+      return;
+    }
+
+    changeFilter({ q: normalized, categoryId: '', page: 0 });
+    run(() => fetchProducts({ q: normalized, categoryId: '', page: 0 }), `${feature} products loaded.`).catch(() => {});
   };
 
   const onUpdateProfile = async (event) => {
@@ -1001,6 +1106,23 @@ function App() {
     totalOrders: myOrdersPage?.content?.length || 0,
     paidOrders: (myOrdersPage?.content || []).filter((item) => item.paid).length,
   };
+  const profileCompletion = Math.min(
+    100,
+    [
+      auth.user?.name,
+      auth.user?.email,
+      profileForm.phone,
+      profileForm.address,
+    ].filter((value) => String(value || '').trim().length > 0).length * 25,
+  );
+  const adminHealth = {
+    catalogHealth:
+      adminStats.products > 0
+        ? Math.round((adminStats.activeProducts / adminStats.products) * 100)
+        : 0,
+    pendingOrders: (adminOrdersPage?.content || []).filter((order) => order.status === 'PENDING').length,
+    fulfilledOrders: (adminOrdersPage?.content || []).filter((order) => ['SHIPPED', 'DELIVERED'].includes(order.status)).length,
+  };
 
   const onSelectCategoryForEdit = (category) => {
     setCategoryForm({
@@ -1016,27 +1138,47 @@ function App() {
   return (
     <div className="app">
       <header className="header">
+        <div className="announcement-bar">FREE SHIPPING ON ORDERS ABOVE INR 1499</div>
         <div className="header-top">
           <div className="brand-wrap">
             <div>
               <p className="brand-name">S H O P Y R A</p>
-              <p className="brand-sub">STYLE . QUALITY . INDIA</p>
+              <p className="brand-sub">CONTEMPORARY FASHION HOUSE</p>
             </div>
           </div>
           <div className="header-top-right">
-            <p className="ui-version-badge">UI V2</p>
-            <p className="header-user-chip">{isLoggedIn ? `Hi, ${firstName}` : 'Guest Mode'}</p>
+            <p className="ui-version-badge">SS26 EDIT</p>
+            <p className="header-user-chip">{isLoggedIn ? `Welcome, ${firstName}` : 'Guest'}</p>
           </div>
         </div>
         <div className="header-main">
           <Navbar activeView={activeView} setActiveView={setActiveView} isLoggedIn={isLoggedIn} isAdmin={isAdmin} />
           <div className="feature-nav">
             {headerFeatures.map((feature) => (
-              <button type="button" className="feature-pill" key={feature} onClick={() => setActiveView('shop')}>{feature}</button>
+              <button type="button" className="feature-pill" key={feature} onClick={() => onHeaderFeatureClick(feature)}>
+                <span className="feature-pill-inner">
+                  <span className="feature-pill-icon">{headerFeatureIcons[feature]}</span>
+                  <span>{feature}</span>
+                </span>
+              </button>
             ))}
           </div>
           <div className="header-actions">
-            {!isLoggedIn ? <button type="button" className="nav-btn action-btn" onClick={() => setActiveView('auth')}>Sign In</button> : <button type="button" className="nav-btn action-btn" onClick={onLogout}>Logout</button>}
+            <button type="button" className="nav-btn ghost" onClick={() => setActiveView(isLoggedIn ? 'user' : 'auth')}>
+              {isLoggedIn ? 'Profile' : 'Login'}
+            </button>
+            <button type="button" className="nav-btn ghost" onClick={() => setActiveView('user')} disabled={!isLoggedIn}>
+              Bag {cart?.itemCount ? `(${cart.itemCount})` : ''}
+            </button>
+            <button
+              type="button"
+              className="nav-btn ghost theme-toggle-btn"
+              onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+              aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+            </button>
+            {!isLoggedIn ? <button type="button" className="nav-btn action-btn" onClick={() => setActiveView('auth')}>Account</button> : <button type="button" className="nav-btn action-btn" onClick={onLogout}>Logout</button>}
           </div>
         </div>
       </header>
@@ -1079,14 +1221,14 @@ function App() {
       {activeView === 'auth' && (
         <section className="auth-grid">
           <form className="panel" onSubmit={onLogin}>
-            <h3>Sign In</h3>
+            <h3>Welcome Back</h3>
             <input type="email" placeholder="Email" value={authForm.login.email} onChange={(e) => setAuthForm((prev) => ({ ...prev, login: { ...prev.login, email: e.target.value } }))} required />
             <input type="password" placeholder="Password" value={authForm.login.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, login: { ...prev.login, password: e.target.value } }))} required />
             <button type="submit">Login</button>
           </form>
 
           <form className="panel" onSubmit={onRegister}>
-            <h3>Create Account</h3>
+            <h3>Create Your Account</h3>
             <input placeholder="Full name" value={authForm.register.name} onChange={(e) => setAuthForm((prev) => ({ ...prev, register: { ...prev.register, name: e.target.value } }))} required />
             <input type="email" placeholder="Email" value={authForm.register.email} onChange={(e) => setAuthForm((prev) => ({ ...prev, register: { ...prev.register, email: e.target.value } }))} required />
             <input type="password" placeholder="Password" value={authForm.register.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, register: { ...prev.register, password: e.target.value } }))} required />
@@ -1146,6 +1288,31 @@ function App() {
               <div><strong>{userStats.paidOrders}</strong><span>Paid Orders</span></div>
             </div>
           </article>
+
+          <article className="profile-highlights panel">
+            <div className="profile-progress-head">
+              <h3>Profile Completion</h3>
+              <strong>{profileCompletion}%</strong>
+            </div>
+            <div className="profile-progress-track" aria-hidden="true">
+              <div className="profile-progress-fill" style={{ width: `${profileCompletion}%` }} />
+            </div>
+            <div className="profile-highlight-grid">
+              <div>
+                <p>Wishlist</p>
+                <strong>{wishlist.length}</strong>
+              </div>
+              <div>
+                <p>Saved Address</p>
+                <strong>{profileForm.address ? 'Yes' : 'No'}</strong>
+              </div>
+              <div>
+                <p>Security</p>
+                <strong>2-Step Ready</strong>
+              </div>
+            </div>
+          </article>
+
           <div className="dashboard-grid">
             <article className="panel profile-panel">
               <h3>Profile Settings</h3>
@@ -1171,7 +1338,7 @@ function App() {
             <form className="inline-form" onSubmit={onAddToCart}>
               <input placeholder="Product ID" value={cartAddForm.productId} onChange={(e) => setCartAddForm((prev) => ({ ...prev, productId: e.target.value }))} required />
               <input type="number" min="1" placeholder="Qty" value={cartAddForm.quantity} onChange={(e) => setCartAddForm((prev) => ({ ...prev, quantity: e.target.value }))} required />
-              <button type="submit">Add</button>
+              <button type="submit" disabled={isAddingToBag}>{isAddingToBag ? 'Adding...' : 'Add'}</button>
               <button type="button" className="ghost" onClick={onClearCart}>Clear</button>
             </form>
 
@@ -1301,25 +1468,40 @@ function App() {
       {activeView === 'admin' && isAdmin && (
         <section className="kibana-admin">
           <aside className="kibana-sidebar">
-            <h3>Observability</h3>
-            <p>Shopyra Admin Space</p>
-            <button type="button">Dashboard</button>
+            <h3>Store Studio</h3>
+            <p>Shopyra Operations</p>
+            <button type="button">Overview</button>
             <button type="button">Users</button>
             <button type="button">Catalog</button>
             <button type="button">Orders</button>
             <button type="button" onClick={() => run(fetchAdminData, 'Admin data refreshed.').catch(() => {})}>
-              Refresh Index
+              Refresh Data
             </button>
           </aside>
 
           <div className="kibana-main">
             <header className="kibana-topbar">
               <div>
-                <p>Analytics Workspace</p>
-                <h3>Admin Dashboard</h3>
+                <p>Commerce Control Room</p>
+                <h3>Admin Studio</h3>
               </div>
               <span>{new Date().toLocaleString()}</span>
             </header>
+
+            <div className="kibana-health-strip">
+              <article>
+                <p>Catalog Health</p>
+                <strong>{adminHealth.catalogHealth}% Active</strong>
+              </article>
+              <article>
+                <p>Pending Queue</p>
+                <strong>{adminHealth.pendingOrders} Orders</strong>
+              </article>
+              <article>
+                <p>Fulfillment</p>
+                <strong>{adminHealth.fulfilledOrders} Orders</strong>
+              </article>
+            </div>
 
             <div className="kpi-grid">
               <article>
@@ -1475,11 +1657,42 @@ function App() {
 
       {((activeView === 'user' && !isLoggedIn) || (activeView === 'admin' && !isAdmin)) && (
         <section className="panel">
-          <h3>Access Required</h3>
+          <h3>Access Needed</h3>
           <p className="muted">Please login first, and use an admin account for admin console.</p>
-          <button type="button" onClick={() => setActiveView('auth')}>Go to Sign In</button>
+          <button type="button" onClick={() => setActiveView('auth')}>Open Account</button>
         </section>
       )}
+
+      <footer className="site-footer">
+        <div className="site-footer-grid">
+          <div>
+            <h4>Shop</h4>
+            <a href="#!">New Arrivals</a>
+            <a href="#!">Women</a>
+            <a href="#!">Men</a>
+            <a href="#!">Accessories</a>
+          </div>
+          <div>
+            <h4>Support</h4>
+            <a href="#!">Help Center</a>
+            <a href="#!">Shipping</a>
+            <a href="#!">Returns</a>
+            <a href="#!">Track Order</a>
+          </div>
+          <div>
+            <h4>Company</h4>
+            <a href="#!">About</a>
+            <a href="#!">Contact</a>
+            <a href="#!">Careers</a>
+            <a href="#!">Privacy</a>
+          </div>
+          <div>
+            <h4>SHOPYRA</h4>
+            <p>Modern fashion essentials with an elevated shopping experience.</p>
+          </div>
+        </div>
+        <p className="site-footer-copy">© 2026 Shopyra. All rights reserved.</p>
+      </footer>
       <ConfirmDialog />
     </div>
   );

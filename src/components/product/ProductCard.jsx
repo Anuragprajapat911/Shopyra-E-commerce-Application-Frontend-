@@ -1,5 +1,8 @@
-﻿import React from 'react';
+import React from 'react';
 import Button from '../ui/Button';
+
+const FALLBACK_FASHION_IMAGE =
+  'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1200&q=80';
 
 function ProductCard({
   product,
@@ -10,18 +13,16 @@ function ProductCard({
   onToggleWishlist,
   onQuickView,
 }) {
+  const title = product.title || product.name;
   const price = product.discountPrice || product.price;
-  const imageUrl =
-    product.imageUrl ||
-    product.images?.[0] ||
-    `https://picsum.photos/seed/shopyra-${product.id}/900/1200`;
+  const imageUrl = product.imageUrl || product.images?.[0] || FALLBACK_FASHION_IMAGE;
 
   return (
     <article className="product-card modern-card">
       <div className="product-image-wrap">
         <img
           src={imageUrl}
-          alt={product.name}
+          alt={title}
           className="product-image-el"
           loading="lazy"
           decoding="async"
@@ -36,8 +37,8 @@ function ProductCard({
         </button>
       </div>
       <div className="product-body">
-        <p className="product-category">{product.category?.name || 'General'}</p>
-        <h4>{product.name}</h4>
+        <p className="product-category">{product.category?.name || 'Collection'}</p>
+        <h4>{title}</h4>
         <div className="price-line">
           <strong>INR {money(price)}</strong>
           {product.discountPrice && <span>INR {money(product.price)}</span>}
@@ -57,4 +58,3 @@ function ProductCard({
 }
 
 export default React.memo(ProductCard);
-
